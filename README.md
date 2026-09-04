@@ -4,7 +4,7 @@ A lightweight family betting tracker with cross-device synchronization through S
 
 ## Supabase setup
 
-Run `supabase-setup.sql` once in the connected Supabase project's SQL Editor. After the site is deployed, add its HTTPS address in Supabase under **Authentication → URL Configuration** as both the Site URL and an allowed Redirect URL.
+The connected Supabase project provides passwordless sign-in and shared cloud storage. Add the deployed HTTPS address in Supabase under **Authentication → URL Configuration** as both the Site URL and an allowed Redirect URL.
 
 ## Local preview
 

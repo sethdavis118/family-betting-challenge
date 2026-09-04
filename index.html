@@ -25,6 +25,7 @@
       --focus: 0 0 0 3px rgba(214,56,47,.18);
     }
     * { box-sizing: border-box; }
+    .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
     body {
       margin: 0;
       font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -214,6 +215,53 @@
     }
     .sync-status { margin:12px 0 0 !important; font-size:13px !important; }
     .sync-status.connected { color:var(--positive); }
+    .access-gate {
+      position:fixed;
+      inset:0;
+      z-index:100;
+      display:grid;
+      place-items:center;
+      padding:20px;
+      background:rgba(255,255,255,.94);
+      backdrop-filter:blur(10px);
+    }
+    .access-gate[hidden] { display:none; }
+    .access-card {
+      width:min(100%, 380px);
+      padding:28px;
+      border-radius:20px;
+      background:var(--panel);
+      box-shadow:0 20px 60px rgba(99,39,24,.14);
+      text-align:center;
+    }
+    .access-icon {
+      width:46px;
+      height:46px;
+      display:grid;
+      place-items:center;
+      margin:0 auto 16px;
+      border-radius:50%;
+      background:var(--soft);
+      color:var(--accent);
+      font-size:21px;
+    }
+    .access-card h2 { margin-bottom:6px; font-size:22px; }
+    .access-card p { margin-bottom:20px; font-size:14px; }
+    .access-card input {
+      width:100%;
+      min-height:54px;
+      padding:8px 14px;
+      border:1px solid var(--border);
+      border-radius:12px;
+      background:var(--soft);
+      color:var(--text);
+      font-size:24px;
+      font-weight:750;
+      letter-spacing:.28em;
+      text-align:center;
+    }
+    .access-card button { width:100%; margin-top:10px; }
+    .access-error { min-height:20px; margin:10px 0 0 !important; color:var(--negative) !important; }
 
     .comparison-grid {
       display:grid;
@@ -364,6 +412,18 @@
   </style>
 </head>
 <body>
+  <div class="access-gate" id="accessGate" role="dialog" aria-modal="true" aria-labelledby="accessTitle" hidden>
+    <form class="access-card" id="accessForm">
+      <div class="access-icon" aria-hidden="true">#</div>
+      <h2 id="accessTitle">Enter family code</h2>
+      <p>This challenge is private. Enter the four-digit code to continue.</p>
+      <label for="accessCode" class="sr-only">Family access code</label>
+      <input id="accessCode" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="one-time-code" enterkeyhint="done" aria-describedby="accessError" required>
+      <button class="primary" type="submit">Continue</button>
+      <button class="secondary" id="gateSignOutBtn" type="button">Use a Different Email</button>
+      <p class="access-error" id="accessError" aria-live="polite"></p>
+    </form>
+  </div>
   <main class="wrap">
     <header>
       <div>
@@ -635,6 +695,47 @@
         else setSyncStatus("Not signed in · data is saved on this device only.");
       }
 
+      function showAccessGate() {
+        $("accessGate").hidden = false;
+        $("accessError").textContent = "";
+        $("accessCode").value = "";
+        setTimeout(() => {
+          $("accessCode").focus();
+          $("accessCode").select();
+        }, 80);
+      }
+
+      function hideAccessGate() {
+        $("accessGate").hidden = true;
+        $("accessError").textContent = "";
+      }
+
+      async function connectAuthorizedUser() {
+        await pullCloudState();
+        subscribeToCloud();
+      }
+
+      async function checkFamilyAccess() {
+        if (!cloudClient || !cloudUser) return false;
+        const { data, error } = await cloudClient
+          .from("family_members")
+          .select("user_id")
+          .eq("user_id", cloudUser.id)
+          .maybeSingle();
+        if (error) {
+          setSyncStatus(`Access check error: ${error.message}`);
+          return false;
+        }
+        if (data) {
+          hideAccessGate();
+          await connectAuthorizedUser();
+          return true;
+        }
+        showAccessGate();
+        setSyncStatus(`Signed in as ${cloudUser.email} · family code required.`);
+        return false;
+      }
+
       async function initializeCloud() {
         if (!cloudClient) {
           setSyncStatus("Cloud sync could not load. Check your internet connection.");
@@ -643,21 +744,18 @@
         const { data } = await cloudClient.auth.getSession();
         cloudUser = data.session?.user || null;
         updateCloudControls();
-        if (cloudUser) {
-          await pullCloudState();
-          subscribeToCloud();
-        }
+        if (cloudUser) await checkFamilyAccess();
         cloudClient.auth.onAuthStateChange(async (_event, session) => {
           const nextUser = session?.user || null;
           const changed = nextUser?.id !== cloudUser?.id;
           cloudUser = nextUser;
           updateCloudControls();
           if (cloudUser && changed) {
-            await pullCloudState();
-            subscribeToCloud();
-          } else if (!cloudUser && cloudChannel) {
-            cloudClient.removeChannel(cloudChannel);
+            await checkFamilyAccess();
+          } else if (!cloudUser) {
+            if (cloudChannel) cloudClient.removeChannel(cloudChannel);
             cloudChannel = null;
+            hideAccessGate();
           }
         });
       }
@@ -927,6 +1025,38 @@
         $("syncBtn").disabled = false;
         if (error) setSyncStatus(`Sign-in error: ${error.message}`);
         else setSyncStatus(`Sign-in link sent to ${email}. Open it on this device to finish connecting.`, true);
+      });
+
+      $("accessForm").addEventListener("submit", async e => {
+        e.preventDefault();
+        if (!cloudClient || !cloudUser) return;
+        const code = $("accessCode").value.trim();
+        if (!/^\d{4}$/.test(code)) {
+          $("accessError").textContent = "Enter the four-digit family code.";
+          $("accessCode").focus();
+          return;
+        }
+        const submit = e.currentTarget.querySelector("button");
+        submit.disabled = true;
+        $("accessError").textContent = "Checking…";
+        const { data, error } = await cloudClient.rpc("join_family", { access_code: code });
+        submit.disabled = false;
+        if (error || data !== true) {
+          $("accessError").textContent = "That code isn't correct. Try again.";
+          $("accessCode").focus();
+          $("accessCode").select();
+          return;
+        }
+        hideAccessGate();
+        await connectAuthorizedUser();
+      });
+
+      $("gateSignOutBtn").addEventListener("click", async () => {
+        if (cloudClient) await cloudClient.auth.signOut();
+        cloudUser = null;
+        hideAccessGate();
+        updateCloudControls();
+        activateTab("settings");
       });
 
       $("syncNowBtn").addEventListener("click", pushCloudState);

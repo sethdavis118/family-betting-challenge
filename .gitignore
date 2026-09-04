@@ -1,0 +1,2 @@
+# Contains the private family access code; keep it out of the public repository.
+supabase-setup.sql
