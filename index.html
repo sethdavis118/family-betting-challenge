@@ -498,6 +498,7 @@
       const STORAGE_KEY = "familyBettingChallenge.v1";
       const SUPABASE_URL = "https://rhdnqdilvvwjtqrnbcpp.supabase.co";
       const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_dwREWeWYtPX9hyMaO7wuMA_tyvia5Zr";
+      const SHARED_CHALLENGE_ID = "family";
       const cloudClient = window.supabase?.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
       let cloudUser = null;
       let cloudChannel = null;
@@ -572,8 +573,8 @@
         if (!cloudClient || !cloudUser) return;
         setSyncStatus("Saving changes…", true);
         const { error } = await cloudClient
-          .from("challenge_state")
-          .upsert({ user_id: cloudUser.id, state, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+          .from("shared_challenge_state")
+          .upsert({ challenge_id: SHARED_CHALLENGE_ID, state, updated_at: new Date().toISOString() }, { onConflict: "challenge_id" });
         if (error) {
           setSyncStatus(`Cloud sync error: ${error.message}`);
           return;
@@ -585,9 +586,9 @@
         if (!cloudClient || !cloudUser) return;
         setSyncStatus("Loading cloud data…", true);
         const { data, error } = await cloudClient
-          .from("challenge_state")
+          .from("shared_challenge_state")
           .select("state")
-          .eq("user_id", cloudUser.id)
+          .eq("challenge_id", SHARED_CHALLENGE_ID)
           .maybeSingle();
         if (error) {
           setSyncStatus(`Cloud sync error: ${error.message}`);
@@ -609,12 +610,12 @@
         if (!cloudClient || !cloudUser) return;
         if (cloudChannel) cloudClient.removeChannel(cloudChannel);
         cloudChannel = cloudClient
-          .channel(`challenge-${cloudUser.id}`)
+          .channel(`challenge-${SHARED_CHALLENGE_ID}`)
           .on("postgres_changes", {
             event: "UPDATE",
             schema: "public",
-            table: "challenge_state",
-            filter: `user_id=eq.${cloudUser.id}`
+            table: "shared_challenge_state",
+            filter: `challenge_id=eq.${SHARED_CHALLENGE_ID}`
           }, payload => {
             if (!payload.new?.state) return;
             applyingRemoteState = true;
