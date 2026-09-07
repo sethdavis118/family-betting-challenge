@@ -566,12 +566,14 @@
       let applyingRemoteState = false;
       const defaultState = () => ({
         players: [
-          { id: "p1", name: "Player 1", starting: 100 },
-          { id: "p2", name: "Player 2", starting: 100 },
-          { id: "p3", name: "Player 3", starting: 100 },
-          { id: "p4", name: "Player 4", starting: 100 }
+          { id: "p1", name: "Player 1", starting: 100, updatedAt: null },
+          { id: "p2", name: "Player 2", starting: 100, updatedAt: null },
+          { id: "p3", name: "Player 3", starting: 100, updatedAt: null },
+          { id: "p4", name: "Player 4", starting: 100, updatedAt: null }
         ],
-        bets: []
+        bets: [],
+        deletedBets: {},
+        updatedAt: null
       });
 
       let state;
@@ -580,6 +582,7 @@
         if (!Array.isArray(state.players) || state.players.length !== 4 || !Array.isArray(state.bets)) {
           state = defaultState();
         }
+        state.deletedBets ||= {};
       } catch {
         state = defaultState();
       }
@@ -617,11 +620,55 @@
       }
 
       function save() {
+        state.updatedAt = new Date().toISOString();
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
         if (cloudUser && !applyingRemoteState) {
           clearTimeout(syncTimer);
-          syncTimer = setTimeout(pushCloudState, 350);
+          syncTimer = setTimeout(pushCloudState, 75);
         }
+      }
+
+      function timeOf(value) {
+        const time = Date.parse(value || "");
+        return Number.isFinite(time) ? time : 0;
+      }
+
+      function mergeStates(localState, remoteState) {
+        const fallback = defaultState();
+        const local = localState || fallback;
+        const remote = remoteState || fallback;
+        const deletedBets = { ...(remote.deletedBets || {}) };
+        Object.entries(local.deletedBets || {}).forEach(([id, deletedAt]) => {
+          if (timeOf(deletedAt) > timeOf(deletedBets[id])) deletedBets[id] = deletedAt;
+        });
+
+        const betMap = new Map();
+        [...(remote.bets || []), ...(local.bets || [])].forEach(bet => {
+          const existing = betMap.get(bet.id);
+          const betTime = timeOf(bet.updatedAt || bet.createdAt);
+          const existingTime = timeOf(existing?.updatedAt || existing?.createdAt);
+          if (!existing || betTime >= existingTime) betMap.set(bet.id, bet);
+        });
+        const bets = [...betMap.values()].filter(bet =>
+          timeOf(deletedBets[bet.id]) < timeOf(bet.updatedAt || bet.createdAt)
+        );
+
+        const localPlayers = new Map((local.players || []).map(player => [player.id, player]));
+        const remotePlayers = new Map((remote.players || []).map(player => [player.id, player]));
+        const players = fallback.players.map(defaultPlayer => {
+          const a = localPlayers.get(defaultPlayer.id);
+          const b = remotePlayers.get(defaultPlayer.id);
+          if (!a) return b || defaultPlayer;
+          if (!b) return a;
+          return timeOf(a.updatedAt) >= timeOf(b.updatedAt) ? a : b;
+        });
+
+        return {
+          players,
+          bets,
+          deletedBets,
+          updatedAt: timeOf(local.updatedAt) >= timeOf(remote.updatedAt) ? local.updatedAt : remote.updatedAt
+        };
       }
 
       function setSyncStatus(message, connected = false) {
@@ -655,12 +702,16 @@
           return;
         }
         if (data?.state?.players && Array.isArray(data.state.bets)) {
+          const remoteState = data.state;
+          const mergedState = mergeStates(state, remoteState);
+          const needsCloudRepair = JSON.stringify(mergedState) !== JSON.stringify(remoteState);
           applyingRemoteState = true;
-          state = data.state;
+          state = mergedState;
           localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
           render();
           applyingRemoteState = false;
           setSyncStatus(`Synced as ${cloudUser.email}`, true);
+          if (needsCloudRepair) await pushCloudState();
         } else {
           await pushCloudState();
         }
@@ -672,18 +723,25 @@
         cloudChannel = cloudClient
           .channel(`challenge-${SHARED_CHALLENGE_ID}`)
           .on("postgres_changes", {
-            event: "UPDATE",
+            event: "*",
             schema: "public",
             table: "shared_challenge_state",
             filter: `challenge_id=eq.${SHARED_CHALLENGE_ID}`
           }, payload => {
             if (!payload.new?.state) return;
+            const remoteState = payload.new.state;
+            const mergedState = mergeStates(state, remoteState);
+            const needsCloudRepair = JSON.stringify(mergedState) !== JSON.stringify(remoteState);
             applyingRemoteState = true;
-            state = payload.new.state;
+            state = mergedState;
             localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
             render();
             applyingRemoteState = false;
             setSyncStatus(`Synced as ${cloudUser.email}`, true);
+            if (needsCloudRepair) {
+              clearTimeout(syncTimer);
+              syncTimer = setTimeout(pushCloudState, 75);
+            }
           })
           .subscribe();
       }
@@ -848,6 +906,7 @@
           input.addEventListener("change", e => {
             const p = state.players.find(x => x.id === e.target.dataset.name);
             p.name = e.target.value.trim() || "Player";
+            p.updatedAt = new Date().toISOString();
             save();
             render();
           });
@@ -915,6 +974,7 @@
             const b = state.bets.find(x => x.id === btn.dataset.id);
             if (b) {
               b.result = btn.dataset.result;
+              b.updatedAt = new Date().toISOString();
               save();
               render();
             }
@@ -924,6 +984,9 @@
         tbody.querySelectorAll("[data-delete]").forEach(btn => {
           btn.addEventListener("click", () => {
             if (confirm("Delete this bet?")) {
+              const deletedAt = new Date().toISOString();
+              state.deletedBets ||= {};
+              state.deletedBets[btn.dataset.delete] = deletedAt;
               state.bets = state.bets.filter(x => x.id !== btn.dataset.delete);
               save();
               render();
@@ -989,6 +1052,7 @@
           return;
         }
 
+        const createdAt = new Date().toISOString();
         state.bets.push({
           id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()),
           playerId,
@@ -996,7 +1060,8 @@
           wager: Math.round(wager * 100) / 100,
           odds: Math.trunc(odds),
           result: "pending",
-          createdAt: new Date().toISOString()
+          createdAt,
+          updatedAt: createdAt
         });
         save();
         $("description").value = "";
@@ -1009,6 +1074,9 @@
       $("wager").addEventListener("input", updatePreview);
       $("odds").addEventListener("input", updatePreview);
       $("filter").addEventListener("change", renderBets);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "hidden" && cloudUser) pushCloudState();
+      });
 
       $("cloudForm").addEventListener("submit", async e => {
         e.preventDefault();
