@@ -526,7 +526,7 @@
               <button class="primary" id="syncBtn" type="submit">Email Sign-in Link</button>
             </form>
             <div class="settings-actions" id="signedInActions" hidden>
-              <button class="secondary" id="syncNowBtn" type="button">Sync Now</button>
+              <button class="primary" id="syncNowBtn" type="button">Upload This Device's Data</button>
               <button class="secondary" id="signOutBtn" type="button">Sign Out</button>
             </div>
             <p class="sync-status" id="syncStatus" aria-live="polite">Not signed in · data is saved on this device only.</p>
@@ -678,15 +678,26 @@
 
       async function pushCloudState() {
         if (!cloudClient || !cloudUser) return;
-        setSyncStatus("Saving changes…", true);
-        const { error } = await cloudClient
+        const snapshot = JSON.parse(JSON.stringify(state));
+        const localCount = snapshot.bets.length;
+        setSyncStatus(`Uploading ${localCount} ${localCount === 1 ? "bet" : "bets"}…`, true);
+        const { data, error } = await cloudClient
           .from("shared_challenge_state")
-          .upsert({ challenge_id: SHARED_CHALLENGE_ID, state, updated_at: new Date().toISOString() }, { onConflict: "challenge_id" });
+          .upsert({ challenge_id: SHARED_CHALLENGE_ID, state: snapshot, updated_at: new Date().toISOString() }, { onConflict: "challenge_id" })
+          .select("state")
+          .single();
         if (error) {
           setSyncStatus(`Cloud sync error: ${error.message}`);
           return;
         }
-        setSyncStatus(`Synced as ${cloudUser.email}`, true);
+        const confirmedIds = new Set((data?.state?.bets || []).map(bet => bet.id));
+        const missingCount = snapshot.bets.filter(bet => !confirmedIds.has(bet.id)).length;
+        if (missingCount) {
+          setSyncStatus(`Cloud verification failed: ${missingCount} ${missingCount === 1 ? "bet was" : "bets were"} not saved.`);
+          return;
+        }
+        const cloudCount = data?.state?.bets?.length ?? 0;
+        setSyncStatus(`Cloud confirmed ${cloudCount} ${cloudCount === 1 ? "bet" : "bets"} · signed in as ${cloudUser.email}`, true);
       }
 
       async function pullCloudState() {
@@ -710,7 +721,8 @@
           localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
           render();
           applyingRemoteState = false;
-          setSyncStatus(`Synced as ${cloudUser.email}`, true);
+          const count = state.bets.length;
+          setSyncStatus(`Cloud loaded ${count} ${count === 1 ? "bet" : "bets"} · signed in as ${cloudUser.email}`, true);
           if (needsCloudRepair) await pushCloudState();
         } else {
           await pushCloudState();
@@ -737,7 +749,8 @@
             localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
             render();
             applyingRemoteState = false;
-            setSyncStatus(`Synced as ${cloudUser.email}`, true);
+            const count = state.bets.length;
+            setSyncStatus(`Cloud updated · ${count} ${count === 1 ? "bet" : "bets"}`, true);
             if (needsCloudRepair) {
               clearTimeout(syncTimer);
               syncTimer = setTimeout(pushCloudState, 75);
