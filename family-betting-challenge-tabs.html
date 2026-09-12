@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#ffffff" />
-  <meta name="app-version" content="2026.09.12.2" />
+  <meta name="app-version" content="2026.09.12.3" />
   <title>Family Betting Challenge</title>
   <script>
     (() => {
@@ -436,7 +436,6 @@
       <label for="accessCode" class="sr-only">Family access code</label>
       <input id="accessCode" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="4" autocomplete="one-time-code" enterkeyhint="done" aria-describedby="accessError" required>
       <button class="primary" type="submit">Continue</button>
-      <button class="secondary" id="gateSignOutBtn" type="button">Use a Different Email</button>
       <p class="access-error" id="accessError" aria-live="polite"></p>
     </form>
   </div>
@@ -533,19 +532,11 @@
         <div class="settings-grid">
           <div class="settings-section cloud">
             <h3>Cloud sync</h3>
-            <p>Sign in with the same email on every device to keep this challenge in sync.</p>
-            <form class="cloud-form" id="cloudForm">
-              <div>
-                <label for="syncEmail">Email address</label>
-                <input id="syncEmail" type="email" autocomplete="email" placeholder="you@example.com" required>
-              </div>
-              <button class="primary" id="syncBtn" type="submit">Email Sign-in Link</button>
-            </form>
+            <p>Cloud access is connected automatically after entering the family code.</p>
             <div class="settings-actions" id="signedInActions" hidden>
-              <button class="primary" id="syncNowBtn" type="button">Upload This Device's Data</button>
-              <button class="secondary" id="signOutBtn" type="button">Sign Out</button>
+              <button class="secondary" id="syncNowBtn" type="button">Refresh from Cloud</button>
             </div>
-            <p class="sync-status" id="syncStatus" aria-live="polite">Not signed in · data is saved on this device only.</p>
+            <p class="sync-status" id="syncStatus" aria-live="polite">Connecting to cloud sync…</p>
           </div>
           <div class="settings-section">
             <h3>Backup</h3>
@@ -571,15 +562,12 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
     (() => {
-      const STORAGE_KEY = "familyBettingChallenge.v1";
       const SUPABASE_URL = "https://rhdnqdilvvwjtqrnbcpp.supabase.co";
       const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_dwREWeWYtPX9hyMaO7wuMA_tyvia5Zr";
       const SHARED_CHALLENGE_ID = "family";
       const cloudClient = window.supabase?.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
       let cloudUser = null;
       let cloudChannel = null;
-      let syncTimer = null;
-      let applyingRemoteState = false;
       const defaultState = () => ({
         players: [
           { id: "p1", name: "Player 1", starting: 100, updatedAt: null },
@@ -588,20 +576,10 @@
           { id: "p4", name: "Player 4", starting: 100, updatedAt: null }
         ],
         bets: [],
-        deletedBets: {},
         updatedAt: null
       });
 
-      let state;
-      try {
-        state = JSON.parse(localStorage.getItem(STORAGE_KEY)) || defaultState();
-        if (!Array.isArray(state.players) || state.players.length !== 4 || !Array.isArray(state.bets)) {
-          state = defaultState();
-        }
-        state.deletedBets ||= {};
-      } catch {
-        state = defaultState();
-      }
+      let state = defaultState();
 
       const $ = (id) => document.getElementById(id);
       const money = (n) => new Intl.NumberFormat("en-US", { style:"currency", currency:"USD" }).format(Number(n) || 0);
@@ -635,56 +613,9 @@
         return settledBalance - pending;
       }
 
-      function save() {
+      async function save() {
         state.updatedAt = new Date().toISOString();
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-        if (cloudUser && !applyingRemoteState) {
-          clearTimeout(syncTimer);
-          syncTimer = setTimeout(pushCloudState, 75);
-        }
-      }
-
-      function timeOf(value) {
-        const time = Date.parse(value || "");
-        return Number.isFinite(time) ? time : 0;
-      }
-
-      function mergeStates(localState, remoteState) {
-        const fallback = defaultState();
-        const local = localState || fallback;
-        const remote = remoteState || fallback;
-        const deletedBets = { ...(remote.deletedBets || {}) };
-        Object.entries(local.deletedBets || {}).forEach(([id, deletedAt]) => {
-          if (timeOf(deletedAt) > timeOf(deletedBets[id])) deletedBets[id] = deletedAt;
-        });
-
-        const betMap = new Map();
-        [...(remote.bets || []), ...(local.bets || [])].forEach(bet => {
-          const existing = betMap.get(bet.id);
-          const betTime = timeOf(bet.updatedAt || bet.createdAt);
-          const existingTime = timeOf(existing?.updatedAt || existing?.createdAt);
-          if (!existing || betTime >= existingTime) betMap.set(bet.id, bet);
-        });
-        const bets = [...betMap.values()].filter(bet =>
-          timeOf(deletedBets[bet.id]) < timeOf(bet.updatedAt || bet.createdAt)
-        );
-
-        const localPlayers = new Map((local.players || []).map(player => [player.id, player]));
-        const remotePlayers = new Map((remote.players || []).map(player => [player.id, player]));
-        const players = fallback.players.map(defaultPlayer => {
-          const a = localPlayers.get(defaultPlayer.id);
-          const b = remotePlayers.get(defaultPlayer.id);
-          if (!a) return b || defaultPlayer;
-          if (!b) return a;
-          return timeOf(a.updatedAt) >= timeOf(b.updatedAt) ? a : b;
-        });
-
-        return {
-          players,
-          bets,
-          deletedBets,
-          updatedAt: timeOf(local.updatedAt) >= timeOf(remote.updatedAt) ? local.updatedAt : remote.updatedAt
-        };
+        return pushCloudState();
       }
 
       function setSyncStatus(message, connected = false) {
@@ -693,7 +624,7 @@
       }
 
       async function pushCloudState() {
-        if (!cloudClient || !cloudUser) return;
+        if (!cloudClient || !cloudUser) return false;
         const snapshot = JSON.parse(JSON.stringify(state));
         const localCount = snapshot.bets.length;
         setSyncStatus(`Uploading ${localCount} ${localCount === 1 ? "bet" : "bets"}…`, true);
@@ -704,16 +635,17 @@
           .single();
         if (error) {
           setSyncStatus(`Cloud sync error: ${error.message}`);
-          return;
+          return false;
         }
         const confirmedIds = new Set((data?.state?.bets || []).map(bet => bet.id));
         const missingCount = snapshot.bets.filter(bet => !confirmedIds.has(bet.id)).length;
         if (missingCount) {
           setSyncStatus(`Cloud verification failed: ${missingCount} ${missingCount === 1 ? "bet was" : "bets were"} not saved.`);
-          return;
+          return false;
         }
         const cloudCount = data?.state?.bets?.length ?? 0;
-        setSyncStatus(`Cloud confirmed ${cloudCount} ${cloudCount === 1 ? "bet" : "bets"} · signed in as ${cloudUser.email}`, true);
+        setSyncStatus(`Cloud confirmed ${cloudCount} ${cloudCount === 1 ? "bet" : "bets"}`, true);
+        return true;
       }
 
       async function pullCloudState() {
@@ -730,14 +662,10 @@
         }
         if (data?.state?.players && Array.isArray(data.state.bets)) {
           const remoteState = data.state;
-          applyingRemoteState = true;
           state = remoteState;
-          state.deletedBets ||= {};
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
           render();
-          applyingRemoteState = false;
           const count = state.bets.length;
-          setSyncStatus(`Cloud loaded ${count} ${count === 1 ? "bet" : "bets"} · signed in as ${cloudUser.email}`, true);
+          setSyncStatus(`Cloud loaded ${count} ${count === 1 ? "bet" : "bets"}`, true);
         } else {
           await pushCloudState();
         }
@@ -756,12 +684,8 @@
           }, payload => {
             if (!payload.new?.state) return;
             const remoteState = payload.new.state;
-            applyingRemoteState = true;
             state = remoteState;
-            state.deletedBets ||= {};
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
             render();
-            applyingRemoteState = false;
             const count = state.bets.length;
             setSyncStatus(`Cloud updated · ${count} ${count === 1 ? "bet" : "bets"}`, true);
           })
@@ -769,10 +693,9 @@
       }
 
       function updateCloudControls() {
-        $("cloudForm").hidden = Boolean(cloudUser);
         $("signedInActions").hidden = !cloudUser;
-        if (cloudUser) setSyncStatus(`Synced as ${cloudUser.email}`, true);
-        else setSyncStatus("Not signed in · data is saved on this device only.");
+        if (cloudUser) setSyncStatus("Cloud session connected", true);
+        else setSyncStatus("Connecting to cloud sync…");
       }
 
       function showAccessGate() {
@@ -812,7 +735,7 @@
           return true;
         }
         showAccessGate();
-        setSyncStatus(`Signed in as ${cloudUser.email} · family code required.`);
+        setSyncStatus("Cloud session connected · family code required.");
         return false;
       }
 
@@ -823,6 +746,14 @@
         }
         const { data } = await cloudClient.auth.getSession();
         cloudUser = data.session?.user || null;
+        if (!cloudUser) {
+          const { data: anonymousData, error } = await cloudClient.auth.signInAnonymously();
+          if (error) {
+            setSyncStatus(`Cloud connection error: ${error.message}`);
+            return;
+          }
+          cloudUser = anonymousData.user;
+        }
         updateCloudControls();
         if (cloudUser) await checkFamilyAccess();
         cloudClient.auth.onAuthStateChange(async (_event, session) => {
@@ -925,11 +856,12 @@
         });
 
         wrap.querySelectorAll("[data-name]").forEach(input => {
-          input.addEventListener("change", e => {
+          input.addEventListener("change", async e => {
             const p = state.players.find(x => x.id === e.target.dataset.name);
+            const previous = { ...p };
             p.name = e.target.value.trim() || "Player";
             p.updatedAt = new Date().toISOString();
-            save();
+            if (!await save()) Object.assign(p, previous);
             render();
           });
         });
@@ -992,25 +924,28 @@
         });
 
         tbody.querySelectorAll("[data-result]").forEach(btn => {
-          btn.addEventListener("click", () => {
+          btn.addEventListener("click", async () => {
             const b = state.bets.find(x => x.id === btn.dataset.id);
             if (b) {
+              const previousResult = b.result;
+              const previousUpdatedAt = b.updatedAt;
               b.result = btn.dataset.result;
               b.updatedAt = new Date().toISOString();
-              save();
+              if (!await save()) {
+                b.result = previousResult;
+                b.updatedAt = previousUpdatedAt;
+              }
               render();
             }
           });
         });
 
         tbody.querySelectorAll("[data-delete]").forEach(btn => {
-          btn.addEventListener("click", () => {
+          btn.addEventListener("click", async () => {
             if (confirm("Delete this bet?")) {
-              const deletedAt = new Date().toISOString();
-              state.deletedBets ||= {};
-              state.deletedBets[btn.dataset.delete] = deletedAt;
+              const previousBets = state.bets.slice();
               state.bets = state.bets.filter(x => x.id !== btn.dataset.delete);
-              save();
+              if (!await save()) state.bets = previousBets;
               render();
             }
           });
@@ -1055,7 +990,7 @@
         }
       }
 
-      $("betForm").addEventListener("submit", e => {
+      $("betForm").addEventListener("submit", async e => {
         e.preventDefault();
         $("formMessage").textContent = "";
 
@@ -1075,7 +1010,7 @@
         }
 
         const createdAt = new Date().toISOString();
-        state.bets.push({
+        const bet = {
           id: (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()),
           playerId,
           description,
@@ -1084,8 +1019,15 @@
           result: "pending",
           createdAt,
           updatedAt: createdAt
-        });
-        save();
+        };
+        state.bets.push(bet);
+        const saved = await save();
+        if (!saved) {
+          state.bets = state.bets.filter(item => item.id !== bet.id);
+          $("formMessage").textContent = "The bet could not be saved to the cloud. Please try again.";
+          render();
+          return;
+        }
         $("description").value = "";
         $("wager").value = "";
         $("odds").value = "";
@@ -1096,26 +1038,6 @@
       $("wager").addEventListener("input", updatePreview);
       $("odds").addEventListener("input", updatePreview);
       $("filter").addEventListener("change", renderBets);
-      document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "hidden" && cloudUser) pushCloudState();
-      });
-
-      $("cloudForm").addEventListener("submit", async e => {
-        e.preventDefault();
-        if (!cloudClient) return;
-        const email = $("syncEmail").value.trim();
-        if (!email) return;
-        $("syncBtn").disabled = true;
-        setSyncStatus("Sending a secure sign-in link…", true);
-        const redirectTo = `${location.origin}${location.pathname}`;
-        const { error } = await cloudClient.auth.signInWithOtp({
-          email,
-          options: { emailRedirectTo: redirectTo }
-        });
-        $("syncBtn").disabled = false;
-        if (error) setSyncStatus(`Sign-in error: ${error.message}`);
-        else setSyncStatus(`Sign-in link sent to ${email}. Open it on this device to finish connecting.`, true);
-      });
 
       $("accessForm").addEventListener("submit", async e => {
         e.preventDefault();
@@ -1141,26 +1063,13 @@
         await connectAuthorizedUser();
       });
 
-      $("gateSignOutBtn").addEventListener("click", async () => {
-        if (cloudClient) await cloudClient.auth.signOut();
-        cloudUser = null;
-        hideAccessGate();
-        updateCloudControls();
-        activateTab("settings");
-      });
+      $("syncNowBtn").addEventListener("click", pullCloudState);
 
-      $("syncNowBtn").addEventListener("click", pushCloudState);
-      $("signOutBtn").addEventListener("click", async () => {
-        if (!cloudClient) return;
-        await cloudClient.auth.signOut();
-        cloudUser = null;
-        updateCloudControls();
-      });
-
-      $("resetBtn").addEventListener("click", () => {
+      $("resetBtn").addEventListener("click", async () => {
         if (confirm("Reset all names, balances, and bets for the entire season?")) {
+          const previousState = state;
           state = defaultState();
-          save();
+          if (!await save()) state = previousState;
           render();
         }
       });
@@ -1182,8 +1091,12 @@
         try {
           const incoming = JSON.parse(await file.text());
           if (!Array.isArray(incoming.players) || incoming.players.length !== 4 || !Array.isArray(incoming.bets)) throw new Error();
+          const previousState = state;
           state = incoming;
-          save();
+          if (!await save()) {
+            state = previousState;
+            throw new Error();
+          }
           render();
         } catch {
           alert("That backup file could not be imported.");
