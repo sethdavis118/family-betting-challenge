@@ -4,7 +4,23 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#ffffff" />
+  <meta name="app-version" content="2026.09.12.1" />
   <title>Family Betting Challenge</title>
+  <script>
+    (() => {
+      const currentVersion = document.querySelector('meta[name="app-version"]')?.content;
+      if (!currentVersion || !location.protocol.startsWith("http")) return;
+      fetch(`version.json?check=${Date.now()}`, { cache: "no-store" })
+        .then(response => response.ok ? response.json() : null)
+        .then(release => {
+          if (!release?.version || release.version === currentVersion) return;
+          const freshUrl = new URL(location.href);
+          freshUrl.searchParams.set("v", release.version);
+          location.replace(freshUrl);
+        })
+        .catch(() => {});
+    })();
+  </script>
   <style>
     :root {
       color-scheme: light;
