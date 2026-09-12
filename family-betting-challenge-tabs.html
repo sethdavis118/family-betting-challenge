@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#ffffff" />
-  <meta name="app-version" content="2026.09.12.3" />
+  <meta name="app-version" content="2026.09.12.4" />
   <title>Family Betting Challenge</title>
   <script>
     (() => {
@@ -184,6 +184,9 @@
     .negative { color:var(--negative); font-weight:700; }
     .actions { display:flex; gap:6px; flex-wrap:wrap; }
     .actions button { min-height:34px; padding:6px 9px; font-size:12px; }
+    .win-action { color:var(--positive); background:color-mix(in srgb, var(--positive) 11%, white); }
+    .loss-action { color:var(--negative); background:color-mix(in srgb, var(--negative) 10%, white); }
+    .push-action { color:var(--muted); background:var(--soft); }
     .empty { text-align:center; color:var(--muted); padding:30px 12px; }
     .top-actions { display:flex; gap:8px; flex-wrap:wrap; }
     .icon-button {
@@ -412,6 +415,72 @@
       form button { grid-column:1/-1; }
       .settings-grid { grid-template-columns:1fr; }
       .settings-section.cloud { grid-column:auto; }
+    }
+    @media (max-width: 680px) {
+      .table-wrap { overflow:visible; }
+      table, tbody { display:block; min-width:0; }
+      thead { display:none; }
+      tbody { display:grid; gap:12px; }
+      tbody tr {
+        display:grid;
+        grid-template-columns:1fr 1fr;
+        gap:0 16px;
+        padding:16px;
+        border-radius:14px;
+        background:var(--soft);
+      }
+      tbody tr:hover { background:var(--soft); }
+      tbody td {
+        display:flex;
+        justify-content:space-between;
+        align-items:baseline;
+        gap:10px;
+        padding:8px 0;
+        border:0;
+        font-size:14px;
+      }
+      tbody td::before {
+        content:attr(data-label);
+        color:var(--muted);
+        font-size:12px;
+        font-weight:700;
+        letter-spacing:.02em;
+        text-transform:uppercase;
+        flex:0 0 auto;
+      }
+      tbody td.bet-description,
+      tbody td.bet-actions { grid-column:1 / -1; }
+      tbody td.bet-description {
+        display:block;
+        padding:0 0 12px;
+        margin-bottom:4px;
+        border-bottom:1px solid var(--border);
+        font-size:16px;
+        font-weight:700;
+        line-height:1.35;
+      }
+      tbody td.bet-description::before {
+        display:block;
+        margin-bottom:4px;
+      }
+      tbody td.bet-actions {
+        display:block;
+        padding:12px 0 0;
+        margin-top:4px;
+        border-top:1px solid var(--border);
+      }
+      tbody td.bet-actions::before { display:none; }
+      .actions { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; }
+      .actions button {
+        min-height:46px;
+        padding:9px 10px;
+        border-radius:10px;
+        font-size:14px;
+      }
+      .actions .danger { grid-column:1 / -1; min-height:38px; }
+      .actions.settled { grid-template-columns:1fr 1fr; }
+      .actions.settled .danger { grid-column:auto; min-height:46px; }
+      .actions button:only-child { grid-column:1 / -1; }
     }
     @media (max-width: 460px) {
       .wrap { width:min(100% - 24px, 1160px); margin-top:24px; }
@@ -900,21 +969,21 @@
           const resultLabel = bet.result[0].toUpperCase() + bet.result.slice(1);
           const row = document.createElement("tr");
           row.innerHTML = `
-            <td>${escapeHtml(player?.name || "Unknown")}</td>
-            <td>${escapeHtml(bet.description)}</td>
-            <td>${money(bet.wager)}</td>
-            <td>${oddsText(bet.odds)}</td>
-            <td>${money(potential)}</td>
-            <td><span class="status">${resultLabel}</span></td>
-            <td class="${impact > 0 ? "positive" : impact < 0 ? "negative" : ""}">
+            <td data-label="Bettor">${escapeHtml(player?.name || "Unknown")}</td>
+            <td class="bet-description" data-label="Bet">${escapeHtml(bet.description)}</td>
+            <td data-label="Wager">${money(bet.wager)}</td>
+            <td data-label="Odds">${oddsText(bet.odds)}</td>
+            <td data-label="Potential">${money(potential)}</td>
+            <td data-label="Result"><span class="status">${resultLabel}</span></td>
+            <td data-label="P/L" class="${impact > 0 ? "positive" : impact < 0 ? "negative" : ""}">
               ${bet.result === "pending" || bet.result === "push" ? "—" : `${impact > 0 ? "+" : ""}${money(impact)}`}
             </td>
-            <td>
-              <div class="actions">
+            <td class="bet-actions" data-label="Actions">
+              <div class="actions ${bet.result === "pending" ? "" : "settled"}">
                 ${bet.result === "pending" ? `
-                  <button class="secondary" type="button" data-result="win" data-id="${bet.id}">Win</button>
-                  <button class="secondary" type="button" data-result="loss" data-id="${bet.id}">Loss</button>
-                  <button class="secondary" type="button" data-result="push" data-id="${bet.id}">Push</button>
+                  <button class="win-action" type="button" data-result="win" data-id="${bet.id}">Win</button>
+                  <button class="loss-action" type="button" data-result="loss" data-id="${bet.id}">Loss</button>
+                  <button class="push-action" type="button" data-result="push" data-id="${bet.id}">Push</button>
                 ` : `<button class="secondary" type="button" data-result="pending" data-id="${bet.id}">Undo</button>`}
                 <button class="danger" type="button" data-delete="${bet.id}">Delete</button>
               </div>
