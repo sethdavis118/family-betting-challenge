@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#ffffff" />
-  <meta name="app-version" content="2026.09.12.1" />
+  <meta name="app-version" content="2026.09.12.2" />
   <title>Family Betting Challenge</title>
   <script>
     (() => {
@@ -730,16 +730,14 @@
         }
         if (data?.state?.players && Array.isArray(data.state.bets)) {
           const remoteState = data.state;
-          const mergedState = mergeStates(state, remoteState);
-          const needsCloudRepair = JSON.stringify(mergedState) !== JSON.stringify(remoteState);
           applyingRemoteState = true;
-          state = mergedState;
+          state = remoteState;
+          state.deletedBets ||= {};
           localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
           render();
           applyingRemoteState = false;
           const count = state.bets.length;
           setSyncStatus(`Cloud loaded ${count} ${count === 1 ? "bet" : "bets"} · signed in as ${cloudUser.email}`, true);
-          if (needsCloudRepair) await pushCloudState();
         } else {
           await pushCloudState();
         }
@@ -758,19 +756,14 @@
           }, payload => {
             if (!payload.new?.state) return;
             const remoteState = payload.new.state;
-            const mergedState = mergeStates(state, remoteState);
-            const needsCloudRepair = JSON.stringify(mergedState) !== JSON.stringify(remoteState);
             applyingRemoteState = true;
-            state = mergedState;
+            state = remoteState;
+            state.deletedBets ||= {};
             localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
             render();
             applyingRemoteState = false;
             const count = state.bets.length;
             setSyncStatus(`Cloud updated · ${count} ${count === 1 ? "bet" : "bets"}`, true);
-            if (needsCloudRepair) {
-              clearTimeout(syncTimer);
-              syncTimer = setTimeout(pushCloudState, 75);
-            }
           })
           .subscribe();
       }
